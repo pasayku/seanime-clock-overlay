@@ -76,16 +76,6 @@ source — it's under 150 lines.
    play something, and open the tray icon. With `isDevelopment: true` you
    can reload the plugin after edits without restarting Seanime.
 
-## Publish your own copy
-
-1. Push this repo to your own GitHub account.
-2. In `seanime-clock-overlay.json`, replace `pasayku` (and
-   `pasayku`) in `manifestURI`, `payloadURI`, `website`, and `author` with
-   your own, and remove any `isDevelopment` field you added for local
-   testing.
-3. Share the raw `manifestURI` link — that's the URL people add in
-   **Settings → Extensions**.
-
 ## Notes / limitations
 
 - The clock is drawn using the player's on-screen-display, the same

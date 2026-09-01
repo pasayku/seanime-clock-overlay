@@ -1,0 +1,22 @@
+{
+    "id": "seanime-clock-overlay",
+    "name": "Clock Overlay",
+    "version": "1.0.0",
+    "manifestURI": "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/seanime-clock-overlay/main/seanime-clock-overlay.json",
+    "language": "typescript",
+    "type": "plugin",
+    "description": "Shows a real-time clock overlay on top of Seanime's built-in player (Denshi desktop app / web player) while a video is playing.",
+    "author": "YOUR_NAME",
+    "icon": "",
+    "website": "https://github.com/YOUR_GITHUB_USERNAME/seanime-clock-overlay",
+    "readme": "",
+    "notes": "Toggle the clock, 12h/24h format and seconds from the tray icon.",
+    "lang": "multi",
+    "payloadURI": "https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/seanime-clock-overlay/main/seanime-clock-overlay.ts",
+    "plugin": {
+        "version": "1",
+        "permissions": {
+            "scopes": ["playback", "storage"]
+        }
+    }
+}

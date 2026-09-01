@@ -41,7 +41,7 @@ source — it's under 150 lines.
 1. In Seanime, go to **Settings → Extensions** and add an external plugin
    by URL, pointing it at this repo's manifest:
    ```
-   https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/seanime-clock-overlay/main/seanime-clock-overlay.json
+   https://raw.githubusercontent.com/pasayku/seanime-clock-overlay/main/seanime-clock-overlay.json
    ```
    (If your Seanime version's UI for this differs, check the
    [extensions docs](https://seanime.gitbook.io/seanime-extensions/plugins/write-test-share)
@@ -79,8 +79,8 @@ source — it's under 150 lines.
 ## Publish your own copy
 
 1. Push this repo to your own GitHub account.
-2. In `seanime-clock-overlay.json`, replace `YOUR_GITHUB_USERNAME` (and
-   `YOUR_NAME`) in `manifestURI`, `payloadURI`, `website`, and `author` with
+2. In `seanime-clock-overlay.json`, replace `pasayku` (and
+   `pasayku`) in `manifestURI`, `payloadURI`, `website`, and `author` with
    your own, and remove any `isDevelopment` field you added for local
    testing.
 3. Share the raw `manifestURI` link — that's the URL people add in

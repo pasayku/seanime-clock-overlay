@@ -6,7 +6,7 @@
     "language": "typescript",
     "type": "plugin",
     "description": "Shows a real-time clock overlay on top of Seanime's built-in player (Denshi desktop app / web player) while a video is playing.",
-    "author": "YOUR_NAME",
+    "author": "pasayku",
     "icon": "",
     "website": "https://github.com/pasayku/seanime-clock-overlay",
     "readme": "",

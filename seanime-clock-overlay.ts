@@ -4,7 +4,7 @@
 /// <reference path="./types/core.d.ts" />
 
 /**
- * Clock Overlay for Seanime (with Ends At & OSD refinement)
+ * Clock Overlay for Seanime (with Ends At support)
  */
 
 function init() {
@@ -13,7 +13,7 @@ function init() {
             enabled: true,
             use24Hour: false,
             showSeconds: true,
-            showEndsAt: true, // New setting for finish time
+            showEndsAt: true,
         })
 
         const REFRESH_MS = 1000
@@ -51,9 +51,7 @@ function init() {
                 return currentTimeStr
             }
 
-            // Attempt to calculate finish time if videoCore exposes duration/currentTime
             try {
-                // Assuming standard video player getters if available in core types
                 const duration = (ctx.videoCore as any).getDuration?.() || 0
                 const currentTime = (ctx.videoCore as any).getCurrentTime?.() || 0
                 const remainingSecs = Math.max(0, duration - currentTime)
@@ -61,10 +59,10 @@ function init() {
                 if (remainingSecs > 0) {
                     const endDate = new Date(now.getTime() + remainingSecs * 1000)
                     const endTimeStr = formatTime(endDate, false, use24h)
-                    return `${currentTimeStr} (Ends at ${endTimeStr})`
+                    return `${currentTimeStr}  |  Ends at ${endTimeStr}`
                 }
             } catch (e) {
-                // Fallback if methods aren't present
+                // Fallback if player getters are unavailable
             }
 
             return currentTimeStr
@@ -91,10 +89,13 @@ function init() {
         }
 
         function stopClock() {
-            if (cancelInterval) {
-                cancelInterval()
-                cancelInterval = null
-            }
+            if (cancelIdentifier => {
+                if (cancelInterval) {
+                    cancelInterval()
+                    cancelInterval = null
+                }
+            })(cancelInterval)
+            cancelInterval = null
             running.set(false)
         }
 

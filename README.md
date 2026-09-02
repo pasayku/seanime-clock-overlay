@@ -1,16 +1,17 @@
 # Clock Overlay for Seanime
 
-A small [Seanime](https://github.com/5rahim/seanime) **plugin** (not a
-standalone app) that shows a real-time clock overlaid on Seanime's built-in
-player — the "native" Denshi desktop player and the online-streaming web
-player — while a video is playing.
+A small [Seanime](https://github.com/5rahim/seanime) **plugin** 
+that draws a clock chip — current time, and optionally the
+projected "Ends at" finish time — directly into Seanime's built-in player
+(the "native" Denshi desktop player and the online-streaming web player),
+styled to sit next to the player's own elapsed/duration readout.
 
-It refreshes once a second and can be toggled on/off, switched between
-12h/24h format, and configured to show/hide seconds, all from a tray icon
-in Seanime's top bar. No external player (MPV/VLC/MPC-HC) is touched — this
-only draws on top of Seanime's own player via its `videoCore` API.
-
-<p align="center"><i>tray icon → Enabled / 24-hour format / Show seconds</i></p>
+Like the rest of the control bar, the chip fades in while you're moving the
+mouse or interacting with playback, and fades out again after a few seconds
+of inactivity — it doesn't just sit on screen permanently. Toggle it on/off,
+switch between 12h/24h format, show/hide seconds, and show/hide "Ends at"
+from a tray icon in Seanime's top bar. No external player (MPV/VLC/MPC-HC)
+is touched — this only draws on top of Seanime's own player.
 
 ## How it works
 
@@ -22,19 +23,36 @@ This plugin:
 
 1. Listens for `video-loaded` / `video-can-play` events on `ctx.videoCore`
    (the API that drives Seanime's built-in player) to know when playback
-   starts.
-2. Starts a `ctx.setInterval` loop that calls
-   `ctx.videoCore.showMessage(text, durationMs)` once a second — this is
-   the same on-screen-display Seanime itself uses for things like "Skipped
-   intro" messages — with a duration slightly longer than the refresh
-   interval so it doesn't flicker.
-3. Stops the loop on `video-terminated` / `video-ended`, or automatically
-   if the player disconnects.
-4. Exposes three toggles (enabled, 24h format, seconds) through a tray
-   popover, persisted with `ctx.settings` (backed by `$storage`).
+   starts, and `video-terminated` / `video-ended` to know when to clean up.
+2. Finds the player's own `<video>` element via `ctx.dom`, walks up to its
+   parent container, and appends a small `<div>` chip into it (Seanime's
+   VideoCore also mounts a hidden `<video>` used to generate seek-preview
+   thumbnails, so candidates are filtered to the first one that isn't
+   `display: none`).
+3. Every second, updates the chip's text and fades it in/out with a CSS
+   opacity transition based on recent activity — mouse movement, clicks,
+   key presses, scroll, or play/pause/seek — using the same kind of
+   idle timeout a player's own control bar uses to auto-hide.
+4. Removes the chip and event listeners on session end.
+5. Exposes four toggles (enabled, 24h format, seconds, "Ends at") through a
+   tray popover, persisted with `ctx.settings` (backed by `$storage`).
 
 See [`seanime-clock-overlay.ts`](./seanime-clock-overlay.ts) for the full
-source — it's under 150 lines.
+source — it's around 300 lines, with the reasoning for each design decision
+in the comments.
+
+### A note on how sturdy this is
+
+Seanime doesn't expose a plugin API for "insert a widget into the control
+bar", and its player UI is plain Tailwind utility classes with no stable
+selector to hook into. This plugin works around that by anchoring to the
+`<video>` element itself (about as stable a selector as HTML5 offers) and
+absolutely-positioning the chip inside its parent — but the exact pixel
+position (`CHIP_POSITION_CSS` in the source, currently bottom-left) is a
+best-effort guess, not something confirmed against a live install. If it
+overlaps something or doesn't show up in your version of Seanime, open your
+browser devtools on the player and adjust `CHIP_BASE_CSS` / `VIDEO_SELECTOR`
+at the top of the file.
 
 ## Install (as a user)
 
@@ -78,14 +96,18 @@ source — it's under 150 lines.
 
 ## Notes / limitations
 
-- The clock is drawn using the player's on-screen-display, the same
-  mechanism Seanime uses for transient messages. It refreshes every
-  second rather than being a truly continuous element, since that's what
-  the `videoCore` API exposes — in practice this is indistinguishable
-  from continuous at a 1-second refresh rate.
+- "Ends at" is `now + (duration − currentTime)`, so if you pause partway
+  through, it keeps sliding forward with the wall clock rather than
+  freezing — i.e. it always answers "if I kept watching from here, when
+  would I finish", the same convention most podcast/video apps use.
+- The idle timeout (3s by default) is our own approximation of the
+  player's hide delay, not something read directly from Seanime — mouse
+  movement, clicks, key presses, scrolling, and play/pause/seek all count
+  as activity and reset it.
 - This targets Seanime's **built-in** player only. It intentionally does
   not hook into external players (MPV/VLC/MPC-HC), which use a separate
   API (`ctx.mpv` / `ctx.playback`).
+- See "A note on how sturdy this is" above for the DOM-placement caveat.
 
 ## License
 

@@ -9,30 +9,34 @@
  * Draws a small clock chip -- current time, and optionally "Ends at" --
  * directly into Seanime's built-in player (the "native" Denshi desktop
  * player and the online-streaming web player), styled to sit alongside the
- * player's own elapsed/duration readout.
+ * player's own elapsed/duration readout. Fades in with player activity
+ * (mouse movement, play/pause, seeking) and fades out again after a few
+ * seconds idle, mirroring the player's own control-bar auto-hide.
  *
- * Like the rest of the control bar ("taskbar"), the chip fades in while
- * you're moving the mouse / interacting with playback over the player, and
- * fades out again after a few seconds of inactivity -- it doesn't just sit
- * on screen permanently.
+ * This does NOT target external players (MPV/VLC/MPC-HC) or Seanime
+ * Denshi's separate libmpv-based MpvCore player (a different rendering
+ * path with no DOM <video> element to attach to) -- only VideoCore, the
+ * HTML5-based built-in player.
  *
- * This does NOT target external players (MPV/VLC/MPC-HC); it only draws on
- * top of Seanime's own built-in player (VideoCore).
+ * --- Debugging -------------------------------------------------------------
+ * The tray popover (click the clock icon) always shows a live status line,
+ * and every step also logs to the browser devtools console prefixed with
+ * "[clock-overlay]". If you don't see the tray icon at all, the plugin
+ * failed to load entirely (permissions, manifest, or a runtime error) --
+ * check the console for a "[clock-overlay]" line or an uncaught exception
+ * near plugin load time.
  *
- * --- How the chip is placed ------------------------------------------------
+ * --- How the chip is placed -------------------------------------------------
  * Seanime doesn't expose a plugin API for "insert a widget into the control
  * bar", so this finds the player's own <video> element via the DOM API and
  * appends the chip as a sibling inside its parent, absolutely positioned in
- * the bottom-left corner of the player. VideoCore also mounts a small,
- * offscreen <video> element to generate seek-preview thumbnails
- * (see video-core-preview.ts upstream), so candidates are filtered down to
- * the first one that isn't `display: none` before picking a parent.
- *
- * Seanime's player is plain Tailwind utility classes with no stable
- * selector to hook into, so this is a best-effort placement rather than a
- * guaranteed one. If the chip ends up overlapping something in your version
- * of Seanime, tweak CHIP_POSITION_CSS and/or VIDEO_SELECTOR below -- open
- * your browser devtools on the player to find better values.
+ * the bottom-left corner of the player (VideoCore also mounts a small,
+ * offscreen <video> for seek-preview thumbnails, so candidates are
+ * filtered down to the first one that isn't `display: none`). If that
+ * lookup fails for any reason, the chip automatically falls back to
+ * `ctx.videoCore.showMessage()` -- the same on-screen-display Seanime uses
+ * for messages like "Skipped intro" -- so you still get a working clock
+ * even if the DOM placement doesn't pan out on your setup.
  */
 
 function init() {
@@ -52,22 +56,21 @@ function init() {
 
         // How often (ms) the chip's text is refreshed while visible.
         const REFRESH_MS = 1000
-        // How long (ms) of no activity (mouse movement, play/pause, seeking)
-        // before the chip fades out -- mirrors a typical player's own
-        // control-bar auto-hide delay.
+        // Duration (ms) for each fallback OSD message -- kept a bit longer
+        // than REFRESH_MS so it doesn't flicker between refreshes.
+        const OSD_DURATION_MS = REFRESH_MS + 400
+        // How long (ms) of no activity before the chip fades out -- mirrors
+        // a typical player's own control-bar auto-hide delay.
         const IDLE_HIDE_MS = 3000
         // DOM events that count as "activity" and bring the chip back.
         const ACTIVITY_EVENTS = ["mousemove", "mousedown", "keydown", "wheel"]
         // Selector used to find the player's <video> element. "video" is
-        // deliberately broad (Seanime exposes no stable class name here);
-        // see the note above about filtering out hidden/offscreen ones.
+        // deliberately broad (Seanime exposes no stable class name here).
         const VIDEO_SELECTOR = "video"
-        // Marker id so we can find our own chip again (e.g. after Seanime
-        // re-renders the player and wipes out manually-injected nodes).
+        // Marker id so we can find our own chip again later if needed.
         const CHIP_ID = "seanime-clock-overlay-chip"
-        // Inline CSS for the chip itself. Adjust the position if it
-        // overlaps something in your version of Seanime -- see the header
-        // comment above.
+        // Inline CSS for the chip. Adjust the position if it overlaps
+        // something in your version of Seanime.
         const CHIP_BASE_CSS = "position:absolute;left:16px;bottom:72px;"
             + "z-index:40;padding:5px 10px;border-radius:6px;"
             + "background:rgba(0,0,0,0.65);color:#fff;"
@@ -75,19 +78,24 @@ function init() {
             + "letter-spacing:0.02em;line-height:1.3;pointer-events:none;"
             + "white-space:nowrap;opacity:0;transition:opacity 200ms ease;"
 
+        function log(...args: any[]) {
+            console.log("[clock-overlay]", ...args)
+        }
+
         // ---------------------------------------------------------------
         // State (drives the tray UI)
         // ---------------------------------------------------------------
         const sessionActive = ctx.state(false) // a video is loaded
-        const visible = ctx.state(false) // chip is currently faded in
+        const visible = ctx.state(false) // chip/overlay is currently shown
+        const statusMessage = ctx.state("Waiting for playback…")
 
         let cancelInterval: (() => void) | null = null
         let lastActivityAt = 0
         let activityUnsubscribers: Array<() => void> = []
         let chipEl: $ui.DOMElement | null = null
-        let playerContainerEl: $ui.DOMElement | null = null
+        let chipMountFailed = false // true once we give up on DOM placement for this session
 
-        // -- Formatting -----------------------------------------------------
+        // -- Formatting -------------------------------------------------------
 
         function formatTime(date: Date, withSeconds: boolean): string {
             let hours = date.getHours()
@@ -115,23 +123,35 @@ function init() {
             return remaining > 0 ? remaining : 0
         }
 
-        // Small two-tone markup: the clock at full brightness, the
-        // "Ends at" projection dimmer, similar to how a secondary label
-        // usually sits next to a primary readout.
-        function buildChipHtml(): string {
+        function buildChipParts(): { time: string, endsAt: string | null } {
             const now = new Date()
-            let html = `<span>${formatTime(now, settings.get("showSeconds", true))}</span>`
-
+            const time = formatTime(now, settings.get("showSeconds", true))
+            let endsAt: string | null = null
             if (settings.get("showEndsAt", true)) {
                 const remaining = getRemainingSeconds()
                 if (remaining !== null) {
-                    const endsAt = new Date(now.getTime() + remaining * 1000)
-                    html += `<span style="opacity:0.65;margin-left:8px;font-weight:400;">`
-                        + `Ends at ${formatTime(endsAt, false)}</span>`
+                    endsAt = formatTime(new Date(now.getTime() + remaining * 1000), false)
                 }
             }
+            return { time, endsAt }
+        }
 
+        // Two-tone markup for the DOM chip: clock at full brightness,
+        // "Ends at" dimmer, like a secondary label next to a primary one.
+        function buildChipHtml(): string {
+            const parts = buildChipParts()
+            let html = `<span>${parts.time}</span>`
+            if (parts.endsAt) {
+                html += `<span style="opacity:0.65;margin-left:8px;font-weight:400;">`
+                    + `Ends at ${parts.endsAt}</span>`
+            }
             return html
+        }
+
+        // Plain-text equivalent for the OSD fallback (showMessage takes text).
+        function buildChipText(): string {
+            const parts = buildChipParts()
+            return parts.endsAt ? `${parts.time}  ·  Ends at ${parts.endsAt}` : parts.time
         }
 
         // -- Activity / idle tracking ----------------------------------------
@@ -153,7 +173,8 @@ function init() {
 
         function detachActivityTracking() {
             while (activityUnsubscribers.length) {
-                activityUnsubscribers.pop()?.()
+                const unsub = activityUnsubscribers.pop()
+                if (unsub) unsub()
             }
         }
 
@@ -171,12 +192,26 @@ function init() {
         }
 
         function mountChip(): Promise<void> {
+            log("looking for a <video> element…")
             return ctx.dom.query(VIDEO_SELECTOR)
-                .then((videos) => firstVisibleVideo(videos, 0))
-                .then((video) => (video ? video.getParent() : null))
+                .then((videos) => {
+                    log("found", videos.length, "<video> element(s)")
+                    return firstVisibleVideo(videos, 0)
+                })
+                .then((video) => {
+                    if (!video) {
+                        log("no visible <video> element -- falling back to the OSD overlay")
+                        chipMountFailed = true
+                        return null
+                    }
+                    return video.getParent()
+                })
                 .then((container) => {
-                    if (!container) return
-                    playerContainerEl = container
+                    if (!container) {
+                        if (!chipMountFailed) log("found the video but not its parent container -- falling back to the OSD overlay")
+                        chipMountFailed = true
+                        return
+                    }
                     return ctx.dom.createElement("div").then((el) => {
                         el.setAttribute("id", CHIP_ID)
                         el.setCssText(CHIP_BASE_CSS)
@@ -184,35 +219,51 @@ function init() {
                         container.append(el)
                         chipEl = el
                         attachActivityTracking(container)
+                        log("chip mounted")
                     })
                 })
-                .catch(() => {
-                    // If the player's DOM shape ever changes and this
-                    // lookup fails, fail quietly rather than spamming
-                    // errors every second -- the chip just won't appear.
+                .catch((err: any) => {
+                    log("error mounting chip, falling back to the OSD overlay:", err)
+                    chipMountFailed = true
                 })
         }
 
         // -- Overlay loop -----------------------------------------------------
 
         function tick() {
-            if (!settings.get("enabled", true)) return
+            if (!settings.get("enabled", true)) {
+                statusMessage.set("Disabled")
+                return
+            }
             if (!ctx.videoCore.getCurrentClientId()) {
                 endSession()
                 return
             }
-            if (!chipEl) return // still mounting
 
             const idle = isIdle()
-            chipEl.setInnerHTML(buildChipHtml())
-            chipEl.setStyle("opacity", idle ? "0" : "1")
-            visible.set(!idle)
+
+            if (chipEl) {
+                chipEl.setInnerHTML(buildChipHtml())
+                chipEl.setStyle("opacity", idle ? "0" : "1")
+                visible.set(!idle)
+                statusMessage.set(idle ? "Hidden — move the mouse to bring it back" : "Showing on the player")
+            } else if (chipMountFailed) {
+                if (!idle) ctx.videoCore.showMessage(buildChipText(), OSD_DURATION_MS)
+                visible.set(!idle)
+                statusMessage.set(idle
+                    ? "Hidden — move the mouse to bring it back"
+                    : "Showing via fallback overlay (see console)")
+            } else {
+                statusMessage.set("Looking for the player…")
+            }
         }
 
         function beginSession() {
             if (cancelInterval) return
             if (!settings.get("enabled", true)) return
 
+            log("session starting")
+            chipMountFailed = false
             markActivity() // treat session start as activity, like controls do on load
             mountChip().then(tick)
             cancelInterval = ctx.setInterval(tick, REFRESH_MS)
@@ -229,34 +280,16 @@ function init() {
                 chipEl.remove()
                 chipEl = null
             }
-            playerContainerEl = null
+            chipMountFailed = false
             sessionActive.set(false)
             visible.set(false)
+            statusMessage.set("Waiting for playback…")
         }
 
         // ---------------------------------------------------------------
-        // Hook into the built-in player (VideoCore)
-        // ---------------------------------------------------------------
-
-        // Covers the case where a video is already loaded when the plugin
-        // (re)loads -- e.g. after a hot-reload during development.
-        if (ctx.videoCore.getPlaybackStatus()) {
-            beginSession()
-        }
-
-        ctx.videoCore.addEventListener("video-loaded", () => beginSession())
-        ctx.videoCore.addEventListener("video-can-play", () => beginSession())
-        ctx.videoCore.addEventListener("video-terminated", () => endSession())
-        ctx.videoCore.addEventListener("video-ended", () => endSession())
-
-        // Treat play/pause/seek as activity too, so keyboard-driven
-        // interactions (not just mouse movement) bring the chip back.
-        ctx.videoCore.addEventListener("video-paused", () => markActivity())
-        ctx.videoCore.addEventListener("video-resumed", () => markActivity())
-        ctx.videoCore.addEventListener("video-seeked", () => markActivity())
-
-        // ---------------------------------------------------------------
-        // Tray UI
+        // Tray UI -- set up FIRST, before anything that could throw, so the
+        // icon (and its status line) always appears even if the videoCore
+        // hookup below fails for some reason.
         // ---------------------------------------------------------------
         const tray = ctx.newTray({
             tooltipText: "Clock Overlay",
@@ -282,20 +315,41 @@ function init() {
         showEndsAtRef.onValueChange((value) => settings.set("showEndsAt", value))
 
         tray.render(() => {
-            const status = !sessionActive.get()
-                ? "Waiting for playback…"
-                : visible.get()
-                    ? "Showing on the player"
-                    : "Hidden — move the mouse to bring it back"
-
             return tray.stack([
                 tray.text("Clock Overlay", { style: { fontWeight: "600" } }),
-                tray.text(status, { style: { opacity: "0.7", fontSize: "12px" } }),
+                tray.text(statusMessage.get(), { style: { opacity: "0.7", fontSize: "12px" } }),
                 tray.switch("Enabled", { fieldRef: enabledRef }),
                 tray.switch("24-hour format", { fieldRef: use24HourRef }),
                 tray.switch("Show seconds", { fieldRef: showSecondsRef }),
                 tray.switch("Show \"Ends at\"", { fieldRef: showEndsAtRef }),
             ])
         })
+
+        // ---------------------------------------------------------------
+        // Hook into the built-in player (VideoCore)
+        // ---------------------------------------------------------------
+        try {
+            // Covers the case where a video is already loaded when the
+            // plugin (re)loads -- e.g. after a hot-reload during dev.
+            if (ctx.videoCore.getPlaybackStatus()) {
+                beginSession()
+            }
+
+            ctx.videoCore.addEventListener("video-loaded", () => beginSession())
+            ctx.videoCore.addEventListener("video-can-play", () => beginSession())
+            ctx.videoCore.addEventListener("video-terminated", () => endSession())
+            ctx.videoCore.addEventListener("video-ended", () => endSession())
+
+            // Treat play/pause/seek as activity too, so keyboard-driven
+            // interactions (not just mouse movement) bring the chip back.
+            ctx.videoCore.addEventListener("video-paused", () => markActivity())
+            ctx.videoCore.addEventListener("video-resumed", () => markActivity())
+            ctx.videoCore.addEventListener("video-seeked", () => markActivity())
+
+            log("videoCore hooks registered")
+        } catch (err) {
+            log("failed to hook into videoCore:", err)
+            statusMessage.set("Error: " + String(err))
+        }
     })
 }
